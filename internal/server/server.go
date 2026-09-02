@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"path/filepath"
 
@@ -27,6 +28,7 @@ func open(store *files.Store) http.HandlerFunc {
 		}
 		filePath, _, err := store.Download(path, nil)
 		if err != nil || filePath == "" {
+			log.Printf("open failed for %q: %v", path, err)
 			http.NotFound(w, r)
 			return
 		}
@@ -43,6 +45,7 @@ func browse(store *files.Store) http.HandlerFunc {
 		path := r.URL.Query().Get("path")
 		entries, err := store.List(path)
 		if err != nil {
+			log.Printf("browse failed for %q: %v", path, err)
 			http.NotFound(w, r)
 			return
 		}
@@ -64,6 +67,7 @@ func download(store *files.Store) http.HandlerFunc {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 		filePath, _, err := store.Download(path, w)
 		if err != nil {
+			log.Printf("download failed for %q: %v", path, err)
 			http.NotFound(w, r)
 			return
 		}

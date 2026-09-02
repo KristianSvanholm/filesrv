@@ -3,6 +3,7 @@ package files
 import (
 	"archive/zip"
 	"io"
+	"log"
 	"math"
 	"net/url"
 	"os"
@@ -145,6 +146,8 @@ func (s *Store) localPath(requestPath string) (string, string, error) {
 
 func (s *Store) buildIndex() ([]SearchEntry, error) {
 	var entries []SearchEntry
+	startedAt := time.Now()
+	log.Printf("building search index for %s", s.root)
 	var scan func(string) error
 	scan = func(directory string) error {
 		items, err := os.ReadDir(directory)
@@ -174,7 +177,11 @@ func (s *Store) buildIndex() ([]SearchEntry, error) {
 		}
 		return nil
 	}
-	return entries, scan(s.root)
+	err := scan(s.root)
+	if err == nil {
+		log.Printf("search index ready: %d entries in %s", len(entries), time.Since(startedAt).Round(time.Millisecond))
+	}
+	return entries, err
 }
 
 func (s *Store) sizeOf(path string) (int64, error) {
@@ -191,6 +198,8 @@ func (s *Store) sizeOf(path string) (int64, error) {
 	if ok && time.Since(cached.updatedAt) < sizeCacheTTL {
 		return cached.size, nil
 	}
+	startedAt := time.Now()
+	log.Printf("scanning directory size: %s", path)
 	var size int64
 	err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -205,6 +214,7 @@ func (s *Store) sizeOf(path string) (int64, error) {
 		s.sizeCacheMu.Lock()
 		s.sizeCache[path] = cachedSize{size: size, updatedAt: time.Now()}
 		s.sizeCacheMu.Unlock()
+		log.Printf("directory size cached: %s (%s) in %s", path, formatSize(size), time.Since(startedAt).Round(time.Millisecond))
 	}
 	return size, err
 }
