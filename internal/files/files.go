@@ -16,10 +16,11 @@ import (
 )
 
 type Entry struct {
-	Name  string
-	Path  string
-	IsDir bool
-	Size  string
+	Name    string
+	Path    string
+	RawPath string
+	IsDir   bool
+	Size    string
 }
 
 type SearchEntry struct {
@@ -71,7 +72,7 @@ func (s *Store) List(requestPath string) ([]Entry, error) {
 		}
 		itemPath := filepath.ToSlash(filepath.Join(requestedPath, item.Name()))
 		size, _ := s.sizeOf(filepath.Join(directory, item.Name()))
-		entries = append(entries, Entry{Name: item.Name(), Path: url.QueryEscape(itemPath), IsDir: item.IsDir(), Size: formatSize(size)})
+		entries = append(entries, Entry{Name: item.Name(), Path: url.QueryEscape(itemPath), RawPath: itemPath, IsDir: item.IsDir(), Size: formatSize(size)})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir != entries[j].IsDir {
