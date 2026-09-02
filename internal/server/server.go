@@ -78,9 +78,9 @@ func download(store *files.Store) http.HandlerFunc {
 }
 
 func search(store *files.Store) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(store.Index())
+		json.NewEncoder(w).Encode(store.Search(r.URL.Query().Get("q")))
 	}
 }
 

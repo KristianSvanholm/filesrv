@@ -56,6 +56,54 @@ func New(root string) (*Store, error) {
 func (s *Store) Root() string         { return s.root }
 func (s *Store) Index() []SearchEntry { return s.index }
 
+func (s *Store) Search(query string) []SearchEntry {
+	query = strings.ToLower(query)
+	if query == "" {
+		return nil
+	}
+	type match struct {
+		entry SearchEntry
+		score float64
+	}
+	matches := make([]match, 0)
+	for _, entry := range s.index {
+		if score := fuzzyScore(entry.Path, query); score >= 0 {
+			matches = append(matches, match{entry, score})
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool { return matches[i].score < matches[j].score })
+	if len(matches) > 12 {
+		matches = matches[:12]
+	}
+	results := make([]SearchEntry, len(matches))
+	for i, match := range matches {
+		results[i] = match.entry
+	}
+	return results
+}
+
+func fuzzyScore(path, query string) float64 {
+	path = strings.ToLower(path)
+	name := path[strings.LastIndex(path, "/")+1:]
+	if position := strings.Index(name, query); position >= 0 {
+		return float64(position)
+	}
+	if position := strings.Index(path, query); position >= 0 {
+		return 100 + float64(position)
+	}
+	last, gaps := -1, 0
+	for _, character := range query {
+		position := strings.IndexRune(path[last+1:], character)
+		if position < 0 {
+			return -1
+		}
+		position += last + 1
+		gaps += position - last - 1
+		last = position
+	}
+	return 1000 + float64(gaps) + float64(len(path))/1000
+}
+
 func (s *Store) List(requestPath string) ([]Entry, error) {
 	directory, requestedPath, err := s.localPath(requestPath)
 	if err != nil {
