@@ -1,0 +1,39 @@
+package view
+
+import "files/internal/files"
+
+type PageData struct {
+	Path string
+	Parent string
+	Username string
+	AtRoot bool
+	Entries []files.Entry
+}
+
+templ Page(data PageData) {
+	<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>files</title><style>*{box-sizing:border-box}body{margin:0;background:#111;color:#ddd;font:14px/1.35 ui-monospace,monospace}.wrap{max-width:640px;margin:4vh auto;padding:0 12px}.user{text-align:center;color:#777;font-size:12px;margin-bottom:8px}.path{color:#777;font-size:12px;margin-bottom:4px}.hint{float:right;color:#555}.up{display:block;width:max-content;padding:2px 0;color:#aaa;text-decoration:none}.list{border-top:1px solid #292929}.item{display:flex;align-items:center;min-height:30px;border-bottom:1px solid #292929}.name{flex:1;color:#ddd;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.folder:before{content:"/ ";color:#777}.size{color:#777;font-size:12px}.download{display:grid;place-items:center;width:26px;height:26px;color:#888;text-decoration:none;font-size:16px}.download:hover,.up:hover{color:#fff}dialog{width:min(620px,calc(100% - 16px));margin:8vh auto;padding:6px;background:#161616;color:#ddd;border:1px solid #444}dialog::backdrop{background:#000a}input{width:100%;padding:4px;border:0;border-bottom:1px solid #444;outline:0;background:transparent;color:inherit;font:inherit}.result{padding:3px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.result.selected{background:#333}</style></head><body><main class="wrap">
+		if data.Username != "" {
+			<div class="user">{ data.Username }</div>
+		}
+		<div class="path">/{ data.Path }<span class="hint">/ search</span></div>
+		if !data.AtRoot {
+			<a class="up" href={ templ.SafeURL("/?path=" + data.Parent) }>../</a>
+		}
+		<section class="list">
+			if len(data.Entries) == 0 {
+				<div class="item">This directory is empty.</div>
+			}
+			for _, item := range data.Entries {
+				<div class="item">
+					if item.IsDir {
+						<a class="name folder" href={ templ.SafeURL("/?path=" + item.Path) }>{ item.Name }</a>
+					} else {
+						<a class="name" href={ templ.SafeURL("/open?path=" + item.Path) }>{ item.Name }</a>
+					}
+					<span class="size">{ item.Size }</span>
+					<a class="download" href={ templ.SafeURL("/download?path=" + item.Path) } aria-label={ "Download " + item.Name }>&#8595;</a>
+				</div>
+			}
+		</section>
+	</main><dialog id="search"><input id="query" autocomplete="off" placeholder="search files"/><div id="results"></div></dialog><script>const dialog=document.querySelector('#search'),query=document.querySelector('#query'),results=document.querySelector('#results');let files=[],matches=[],selected=0;fetch('/search').then(r=>r.json()).then(data=>files=data);function fuzzy(text,needle){let i=0;for(const char of text.toLowerCase())if(char===needle[i])i++;return i===needle.length}function render(){const value=query.value.toLowerCase();matches=value?files.filter(f=>fuzzy(f.path,value)).slice(0,12):[];selected=0;results.replaceChildren(...matches.map((file,i)=>{const row=document.createElement('div');row.className='result'+(i===selected?' selected':'');row.textContent=file.path+(file.dir?' /':'');return row}))}function openSearch(){dialog.showModal();query.value='';render();query.focus()}function go(){if(matches[selected])location.href='/?path='+encodeURIComponent(matches[selected].parent)}document.addEventListener('keydown',event=>{if(event.key==='/'&&!dialog.open&&!event.ctrlKey&&!event.metaKey){event.preventDefault();openSearch()}else if(dialog.open&&event.key==='Escape')dialog.close();else if(dialog.open&&event.key==='ArrowDown'){event.preventDefault();selected=Math.min(selected+1,matches.length-1);renderSelected()}else if(dialog.open&&event.key==='ArrowUp'){event.preventDefault();selected=Math.max(selected-1,0);renderSelected()}else if(dialog.open&&event.key==='Enter'){event.preventDefault();go()}});function renderSelected(){[...results.children].forEach((row,i)=>row.classList.toggle('selected',i===selected))}query.addEventListener('input',render);</script></body></html>
+}

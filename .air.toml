@@ -1,0 +1,14 @@
+root = "."
+tmp_dir = ".tmp"
+
+[build]
+  cmd = "templ generate && go build -o .tmp/main ./cmd/"
+  entrypoint = ".tmp/main"
+  delay = 1000
+  exclude_dir = [".tmp"]
+  exclude_regex = ["_templ\\.go$"]
+  include_ext = ["go", "templ"]
+  kill_delay = "0s"
+
+[screen]
+  clear_on_rebuild = true
