@@ -11,11 +11,11 @@ type PageData struct {
 }
 
 templ Page(data PageData) {
-	<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>files</title><style>*{box-sizing:border-box}body{margin:0;background:#111;color:#ddd;font:14px/1.35 ui-monospace,monospace}.wrap{max-width:640px;margin:4vh auto;padding:0 12px}.user{text-align:center;color:#777;font-size:12px;margin-bottom:8px}.path{color:#777;font-size:12px;margin-bottom:4px}.hint{float:right;color:#555}.up{display:block;width:max-content;padding:2px 0;color:#aaa;text-decoration:none}.list{border-top:1px solid #292929}.item{display:flex;align-items:center;min-height:30px;border-bottom:1px solid #292929}.name{flex:1;color:#ddd;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.folder:before{content:"/ ";color:#777}.size{color:#777;font-size:12px}.download{display:grid;place-items:center;width:26px;height:26px;color:#888;text-decoration:none;font-size:16px}.download:hover,.up:hover{color:#fff}dialog{width:min(620px,calc(100% - 16px));margin:8vh auto;padding:6px;background:#161616;color:#ddd;border:1px solid #444}dialog::backdrop{background:#000a}input{width:100%;padding:4px;border:0;border-bottom:1px solid #444;outline:0;background:transparent;color:inherit;font:inherit}.result{padding:3px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.result.selected{background:#333}</style></head><body><main class="wrap">
+	<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><title>files</title><style>*{box-sizing:border-box}body{margin:0;background:#111;color:#ddd;font:14px/1.35 ui-monospace,monospace}.wrap{max-width:640px;margin:4vh auto;padding:0 12px}.user{text-align:center;color:#777;font-size:12px;margin-bottom:8px}.path{color:#777;font-size:12px;margin-bottom:4px}.hint{float:right;padding:0;border:0;background:transparent;color:#555;font:inherit;cursor:pointer}.hint:hover{color:#fff}.up{display:block;width:max-content;padding:2px 0;color:#aaa;text-decoration:none}.list{border-top:1px solid #292929}.item{display:flex;align-items:center;min-height:30px;border-bottom:1px solid #292929}.name{flex:1;color:#ddd;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.folder:before{content:"/ ";color:#777}.size{color:#777;font-size:12px}.download{display:grid;place-items:center;width:26px;height:26px;color:#888;text-decoration:none;font-size:16px}.download:hover,.up:hover{color:#fff}dialog{width:min(620px,calc(100% - 16px));margin:8vh auto;padding:6px;background:#161616;color:#ddd;border:1px solid #444}dialog::backdrop{background:#000a}input{width:100%;padding:4px;border:0;border-bottom:1px solid #444;outline:0;background:transparent;color:inherit;font:inherit}.result{padding:3px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.result.selected{background:#333}</style></head><body><main class="wrap">
 		if data.Username != "" {
 			<div class="user">{ data.Username }</div>
 		}
-		<div class="path">/{ data.Path }<span class="hint">/ search</span></div>
+		<div class="path">/{ data.Path }<button class="hint" type="button">/ search</button></div>
 		if !data.AtRoot {
 			<a class="up" href={ templ.SafeURL("/?path=" + data.Parent) }>../</a>
 		}
@@ -45,10 +45,12 @@ templ Page(data PageData) {
 		const dialog = document.querySelector('#search');
 		const query = document.querySelector('#query');
 		const results = document.querySelector('#results');
+		const searchHint = document.querySelector('.hint');
 		const focus = new URLSearchParams(location.search).get('focus');
 		let matches = [];
 		let selected = 0;
 		let timer;
+		let searchID = 0;
 
 		function render() {
 			results.replaceChildren(...matches.map((file, index) => {
@@ -61,14 +63,16 @@ templ Page(data PageData) {
 
 		function search() {
 			clearTimeout(timer);
+			const id = ++searchID;
 			timer = setTimeout(() => {
 				fetch('/search?q=' + encodeURIComponent(query.value))
 					.then(response => response.json())
-					.then(data => { matches = data; selected = 0; render(); });
+					.then(data => { if (id === searchID) { matches = data; selected = 0; render(); } });
 			}, 100);
 		}
 
 		function openSearch() {
+			searchID++;
 			dialog.showModal();
 			query.value = '';
 			matches = [];
@@ -89,6 +93,7 @@ templ Page(data PageData) {
 		});
 
 		query.addEventListener('input', search);
+		searchHint.addEventListener('click', openSearch);
 		if (focus) {
 			const name = focus.slice(focus.lastIndexOf('/') + 1);
 			const row = [...document.querySelectorAll('[data-name]')].find(row => row.dataset.name === name);
