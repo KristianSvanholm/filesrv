@@ -69,3 +69,60 @@ func TestParseSize(t *testing.T) {
 		}
 	}
 }
+
+func TestSearch(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "readme.md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "release-notes.md"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := store.Search("rme")
+	if len(results) != 1 || results[0].Path != "readme.md" {
+		t.Errorf("Search() = %#v, want readme.md", results)
+	}
+}
+
+func TestDotEnvIsServed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := store.List("")
+	if err != nil || len(entries) != 1 || entries[0].Name != ".env" {
+		t.Fatalf("List() = %#v, %v; want .env entry", entries, err)
+	}
+	if _, _, err := store.Download(".env", &bytes.Buffer{}); err != nil {
+		t.Fatalf("Download(.env): %v", err)
+	}
+}
+
+func TestDownloadRefreshesDirectorySize(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "directory")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.List(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "large.txt"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := store.CanDownload("directory"); err != nil || allowed {
+		t.Errorf("CanDownload(directory) = %t, %v; want false, nil", allowed, err)
+	}
+}

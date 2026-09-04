@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sahilm/fuzzy"
 )
 
 type Entry struct {
@@ -87,51 +89,22 @@ func (s *Store) Root() string         { return s.root }
 func (s *Store) Index() []SearchEntry { return s.index }
 
 func (s *Store) Search(query string) []SearchEntry {
-	query = strings.ToLower(query)
 	if query == "" {
 		return nil
 	}
-	type match struct {
-		entry SearchEntry
-		score float64
+	paths := make([]string, len(s.index))
+	for i, entry := range s.index {
+		paths[i] = entry.Path
 	}
-	matches := make([]match, 0)
-	for _, entry := range s.index {
-		if score := fuzzyScore(entry.Path, query); score >= 0 {
-			matches = append(matches, match{entry, score})
-		}
-	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].score < matches[j].score })
+	matches := fuzzy.Find(query, paths)
 	if len(matches) > 12 {
 		matches = matches[:12]
 	}
 	results := make([]SearchEntry, len(matches))
 	for i, match := range matches {
-		results[i] = match.entry
+		results[i] = s.index[match.Index]
 	}
 	return results
-}
-
-func fuzzyScore(path, query string) float64 {
-	path = strings.ToLower(path)
-	name := path[strings.LastIndex(path, "/")+1:]
-	if position := strings.Index(name, query); position >= 0 {
-		return float64(position)
-	}
-	if position := strings.Index(path, query); position >= 0 {
-		return 100 + float64(position)
-	}
-	last, gaps := -1, 0
-	for _, character := range query {
-		position := strings.IndexRune(path[last+1:], character)
-		if position < 0 {
-			return -1
-		}
-		position += last + 1
-		gaps += position - last - 1
-		last = position
-	}
-	return 1000 + float64(gaps) + float64(len(path))/1000
 }
 
 func (s *Store) List(requestPath string) ([]Entry, error) {
@@ -145,11 +118,8 @@ func (s *Store) List(requestPath string) ([]Entry, error) {
 	}
 	entries := make([]Entry, 0, len(items))
 	for _, item := range items {
-		if item.Name() == ".env" {
-			continue
-		}
 		itemPath := filepath.ToSlash(filepath.Join(requestedPath, item.Name()))
-		size, _ := s.sizeOf(filepath.Join(directory, item.Name()))
+		size, _ := s.sizeOf(filepath.Join(directory, item.Name()), true)
 		entries = append(entries, Entry{Name: item.Name(), Path: url.QueryEscape(itemPath), RawPath: itemPath, IsDir: item.IsDir(), Size: formatSize(size), CanDownload: s.maxDownloadSize == 0 || size <= s.maxDownloadSize})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -171,7 +141,7 @@ func (s *Store) Parent(requestPath string) string {
 
 func (s *Store) Download(requestPath string, writer io.Writer) (string, string, error) {
 	path, requestedPath, err := s.localPath(requestPath)
-	if err != nil || filepath.Base(requestedPath) == ".env" {
+	if err != nil {
 		return "", "", os.ErrNotExist
 	}
 	info, err := os.Stat(path)
@@ -179,7 +149,7 @@ func (s *Store) Download(requestPath string, writer io.Writer) (string, string, 
 		return "", "", err
 	}
 	if writer != nil {
-		size, err := s.sizeOf(path)
+		size, err := s.sizeOf(path, false)
 		if err != nil {
 			return "", "", err
 		}
@@ -205,11 +175,11 @@ func (s *Store) Download(requestPath string, writer io.Writer) (string, string, 
 }
 
 func (s *Store) CanDownload(requestPath string) (bool, error) {
-	path, requestedPath, err := s.localPath(requestPath)
-	if err != nil || filepath.Base(requestedPath) == ".env" {
+	path, _, err := s.localPath(requestPath)
+	if err != nil {
 		return false, os.ErrNotExist
 	}
-	size, err := s.sizeOf(path)
+	size, err := s.sizeOf(path, false)
 	if err != nil {
 		return false, err
 	}
@@ -255,9 +225,6 @@ func (s *Store) buildIndex() ([]SearchEntry, error) {
 			return nil
 		}
 		for _, item := range items {
-			if item.Name() == ".env" {
-				continue
-			}
 			path := filepath.Join(directory, item.Name())
 			relative, err := filepath.Rel(s.root, path)
 			if err != nil {
@@ -284,7 +251,7 @@ func (s *Store) buildIndex() ([]SearchEntry, error) {
 	return entries, err
 }
 
-func (s *Store) sizeOf(path string) (int64, error) {
+func (s *Store) sizeOf(path string, useCache bool) (int64, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return 0, err
@@ -292,11 +259,13 @@ func (s *Store) sizeOf(path string) (int64, error) {
 	if !info.IsDir() {
 		return info.Size(), nil
 	}
-	s.sizeCacheMu.Lock()
-	cached, ok := s.sizeCache[path]
-	s.sizeCacheMu.Unlock()
-	if ok && time.Since(cached.updatedAt) < sizeCacheTTL {
-		return cached.size, nil
+	if useCache {
+		s.sizeCacheMu.Lock()
+		cached, ok := s.sizeCache[path]
+		s.sizeCacheMu.Unlock()
+		if ok && time.Since(cached.updatedAt) < sizeCacheTTL {
+			return cached.size, nil
+		}
 	}
 	startedAt := time.Now()
 	log.Printf("scanning directory size: %s", path)
@@ -311,10 +280,12 @@ func (s *Store) sizeOf(path string) (int64, error) {
 		return nil
 	})
 	if err == nil {
-		s.sizeCacheMu.Lock()
-		s.sizeCache[path] = cachedSize{size: size, updatedAt: time.Now()}
-		s.sizeCacheMu.Unlock()
-		log.Printf("directory size cached: %s (%s) in %s", path, formatSize(size), time.Since(startedAt).Round(time.Millisecond))
+		if useCache {
+			s.sizeCacheMu.Lock()
+			s.sizeCache[path] = cachedSize{size: size, updatedAt: time.Now()}
+			s.sizeCacheMu.Unlock()
+			log.Printf("directory size cached: %s (%s) in %s", path, formatSize(size), time.Since(startedAt).Round(time.Millisecond))
+		}
 	}
 	return size, err
 }
