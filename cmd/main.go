@@ -32,6 +32,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	trustedProxyCIDRs, err := server.ParseTrustedProxyCIDRs(os.Getenv("FILES_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		log.Fatalf("FILES_TRUSTED_PROXY_CIDRS: %v", err)
+	}
 	log.Printf("serving %s at http://localhost:3000", store.Root())
-	log.Fatal(http.ListenAndServe(":3000", server.New(store)))
+	log.Fatal(http.ListenAndServe(":3000", server.New(store, trustedProxyCIDRs)))
 }
