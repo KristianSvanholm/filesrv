@@ -2,6 +2,7 @@ package files
 
 import (
 	"archive/zip"
+	"errors"
 	"io"
 	"log"
 	"math"
@@ -16,11 +17,12 @@ import (
 )
 
 type Entry struct {
-	Name    string
-	Path    string
-	RawPath string
-	IsDir   bool
-	Size    string
+	Name        string
+	Path        string
+	RawPath     string
+	IsDir       bool
+	Size        string
+	CanDownload bool
 }
 
 type SearchEntry struct {
@@ -30,10 +32,11 @@ type SearchEntry struct {
 }
 
 type Store struct {
-	root        string
-	index       []SearchEntry
-	sizeCache   map[string]cachedSize
-	sizeCacheMu sync.Mutex
+	root            string
+	maxDownloadSize int64
+	index           []SearchEntry
+	sizeCache       map[string]cachedSize
+	sizeCacheMu     sync.Mutex
 }
 
 type cachedSize struct {
@@ -43,12 +46,39 @@ type cachedSize struct {
 
 const sizeCacheTTL = time.Hour
 
-func New(root string) (*Store, error) {
+var ErrDownloadTooLarge = errors.New("download exceeds size limit")
+
+func ParseSize(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	multiplier := int64(1)
+	if len(value) > 0 {
+		switch strings.ToUpper(value[len(value)-1:]) {
+		case "K":
+			multiplier = 1 << 10
+		case "M":
+			multiplier = 1 << 20
+		case "G":
+			multiplier = 1 << 30
+		case "T":
+			multiplier = 1 << 40
+		}
+		if multiplier > 1 {
+			value = value[:len(value)-1]
+		}
+	}
+	amount, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || amount < 0 || amount > (int64(^uint64(0)>>1))/multiplier {
+		return 0, errors.New("invalid size")
+	}
+	return amount * multiplier, nil
+}
+
+func New(root string, maxDownloadSize int64) (*Store, error) {
 	resolved, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{root: resolved, sizeCache: make(map[string]cachedSize)}
+	store := &Store{root: resolved, maxDownloadSize: maxDownloadSize, sizeCache: make(map[string]cachedSize)}
 	store.index, err = store.buildIndex()
 	return store, err
 }
@@ -120,7 +150,7 @@ func (s *Store) List(requestPath string) ([]Entry, error) {
 		}
 		itemPath := filepath.ToSlash(filepath.Join(requestedPath, item.Name()))
 		size, _ := s.sizeOf(filepath.Join(directory, item.Name()))
-		entries = append(entries, Entry{Name: item.Name(), Path: url.QueryEscape(itemPath), RawPath: itemPath, IsDir: item.IsDir(), Size: formatSize(size)})
+		entries = append(entries, Entry{Name: item.Name(), Path: url.QueryEscape(itemPath), RawPath: itemPath, IsDir: item.IsDir(), Size: formatSize(size), CanDownload: s.maxDownloadSize == 0 || size <= s.maxDownloadSize})
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].IsDir != entries[j].IsDir {
@@ -148,6 +178,15 @@ func (s *Store) Download(requestPath string, writer io.Writer) (string, string, 
 	if err != nil {
 		return "", "", err
 	}
+	if writer != nil {
+		size, err := s.sizeOf(path)
+		if err != nil {
+			return "", "", err
+		}
+		if s.maxDownloadSize > 0 && size > s.maxDownloadSize {
+			return "", "", ErrDownloadTooLarge
+		}
+	}
 	name := filepath.Base(requestedPath)
 	if !info.IsDir() {
 		return path, name, nil
@@ -163,6 +202,18 @@ func (s *Store) Download(requestPath string, writer io.Writer) (string, string, 
 		err = closeErr
 	}
 	return "", name + ".zip", err
+}
+
+func (s *Store) CanDownload(requestPath string) (bool, error) {
+	path, requestedPath, err := s.localPath(requestPath)
+	if err != nil || filepath.Base(requestedPath) == ".env" {
+		return false, os.ErrNotExist
+	}
+	size, err := s.sizeOf(path)
+	if err != nil {
+		return false, err
+	}
+	return s.maxDownloadSize == 0 || size <= s.maxDownloadSize, nil
 }
 
 func (s *Store) IsDirectory(requestPath string) bool {

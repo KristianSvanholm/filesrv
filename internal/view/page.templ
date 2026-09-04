@@ -31,7 +31,11 @@ templ Page(data PageData) {
 						<a class="name" href={ templ.SafeURL("/open?path=" + item.Path) }>{ item.Name }</a>
 					}
 					<span class="size">{ item.Size }</span>
-					<a class="download" href={ templ.SafeURL("/download?path=" + item.Path) } aria-label={ "Download " + item.Name }>&#8595;</a>
+					if item.CanDownload {
+						<a class="download" href={ templ.SafeURL("/download?path=" + item.Path) } aria-label={ "Download " + item.Name }>&#8595;</a>
+					} else {
+						<span class="download"></span>
+					}
 				</div>
 			}
 		</section>

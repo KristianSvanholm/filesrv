@@ -2,9 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"files/internal/files"
 	"files/internal/view"
@@ -58,6 +61,17 @@ func browse(store *files.Store) http.HandlerFunc {
 func download(store *files.Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Query().Get("path")
+		allowed, err := store.CanDownload(path)
+		if err != nil {
+			log.Printf("download failed for %q: %v", path, err)
+			http.NotFound(w, r)
+			return
+		}
+		if !allowed {
+			http.Error(w, "download exceeds size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		log.Printf("download user=%q ip=%q path=%q", username(r), clientIP(r), path)
 		isDirectory := store.IsDirectory(path)
 		name := filepath.Base(path)
 		if isDirectory {
@@ -68,6 +82,10 @@ func download(store *files.Store) http.HandlerFunc {
 		filePath, _, err := store.Download(path, w)
 		if err != nil {
 			log.Printf("download failed for %q: %v", path, err)
+			if errors.Is(err, files.ErrDownloadTooLarge) {
+				http.Error(w, "download exceeds size limit", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.NotFound(w, r)
 			return
 		}
@@ -91,4 +109,15 @@ func username(r *http.Request) string {
 		}
 	}
 	return ""
+}
+
+func clientIP(r *http.Request) string {
+	if forwardedFor := r.Header.Get("X-Forwarded-For"); forwardedFor != "" {
+		return strings.TrimSpace(strings.Split(forwardedFor, ",")[0])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
 }
