@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDownloadSizeLimit(t *testing.T) {
@@ -124,5 +125,75 @@ func TestDownloadRefreshesDirectorySize(t *testing.T) {
 	}
 	if allowed, err := store.CanDownload("directory"); err != nil || allowed {
 		t.Errorf("CanDownload(directory) = %t, %v; want false, nil", allowed, err)
+	}
+}
+
+func TestNewPrimesDirectorySizes(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "directory", "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "directory", "a.txt"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "b.txt"), []byte("123"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := New(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]int64{
+		filepath.Join(root, "directory"): 8,
+		nested:                           3,
+	} {
+		size, ok := store.lookupSize(path)
+		if !ok {
+			t.Errorf("size for %q not primed by New", path)
+			continue
+		}
+		if size != want {
+			t.Errorf("primed size for %q = %d, want %d", path, size, want)
+		}
+	}
+}
+
+func TestStaleSizeIsServedWhileRefreshing(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "directory")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "a.txt"), []byte("12345"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(directory, "b.txt"), []byte("123"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store.sizeCacheMu.Lock()
+	store.sizeCache[directory] = cachedSize{size: 5, updatedAt: time.Now().Add(-2 * sizeCacheTTL)}
+	store.sizeCacheMu.Unlock()
+
+	if size, _ := store.lookupSize(directory); size != 5 {
+		t.Errorf("stale lookup = %d, want the stale 5", size)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		size, _ := store.lookupSize(directory)
+		if size == 8 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background refresh did not update the size, still %d", size)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

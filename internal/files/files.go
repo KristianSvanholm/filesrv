@@ -42,8 +42,9 @@ type Store struct {
 }
 
 type cachedSize struct {
-	size      int64
-	updatedAt time.Time
+	size       int64
+	updatedAt  time.Time
+	refreshing bool
 }
 
 const sizeCacheTTL = time.Hour
@@ -218,17 +219,18 @@ func (s *Store) buildIndex() ([]SearchEntry, error) {
 	var entries []SearchEntry
 	startedAt := time.Now()
 	log.Printf("building search index for %s", s.root)
-	var scan func(string) error
-	scan = func(directory string) error {
+	var scan func(string) (int64, error)
+	scan = func(directory string) (int64, error) {
 		items, err := os.ReadDir(directory)
 		if err != nil {
-			return nil
+			return 0, nil
 		}
+		var total int64
 		for _, item := range items {
 			path := filepath.Join(directory, item.Name())
 			relative, err := filepath.Rel(s.root, path)
 			if err != nil {
-				return err
+				return 0, err
 			}
 			relative = filepath.ToSlash(relative)
 			parent := filepath.ToSlash(filepath.Dir(relative))
@@ -237,16 +239,23 @@ func (s *Store) buildIndex() ([]SearchEntry, error) {
 			}
 			entries = append(entries, SearchEntry{Path: relative, Parent: parent, Dir: item.IsDir()})
 			if item.IsDir() {
-				if err := scan(path); err != nil {
-					return err
+				size, err := scan(path)
+				if err != nil {
+					return 0, err
 				}
+				total += size
+				continue
+			}
+			if info, err := item.Info(); err == nil {
+				total += info.Size()
 			}
 		}
-		return nil
+		s.storeSize(directory, total)
+		return total, nil
 	}
-	err := scan(s.root)
+	_, err := scan(s.root)
 	if err == nil {
-		log.Printf("search index ready: %d entries in %s", len(entries), time.Since(startedAt).Round(time.Millisecond))
+		log.Printf("search index ready: %d entries, %d directory sizes in %s", len(entries), len(s.sizeCache), time.Since(startedAt).Round(time.Millisecond))
 	}
 	return entries, err
 }
@@ -260,17 +269,59 @@ func (s *Store) sizeOf(path string, useCache bool) (int64, error) {
 		return info.Size(), nil
 	}
 	if useCache {
-		s.sizeCacheMu.Lock()
-		cached, ok := s.sizeCache[path]
-		s.sizeCacheMu.Unlock()
-		if ok && time.Since(cached.updatedAt) < sizeCacheTTL {
-			return cached.size, nil
+		if size, ok := s.lookupSize(path); ok {
+			return size, nil
 		}
 	}
+	size, err := walkSize(path)
+	if err == nil && useCache {
+		s.storeSize(path, size)
+	}
+	return size, err
+}
+
+// lookupSize returns a cached directory size. A stale entry is still served so
+// the page renders immediately; the rescan happens in the background.
+func (s *Store) lookupSize(path string) (int64, bool) {
+	s.sizeCacheMu.Lock()
+	defer s.sizeCacheMu.Unlock()
+	cached, ok := s.sizeCache[path]
+	if !ok {
+		return 0, false
+	}
+	if time.Since(cached.updatedAt) >= sizeCacheTTL && !cached.refreshing {
+		cached.refreshing = true
+		s.sizeCache[path] = cached
+		go s.refreshSize(path)
+	}
+	return cached.size, true
+}
+
+func (s *Store) refreshSize(path string) {
+	size, err := walkSize(path)
+	if err != nil {
+		log.Printf("directory size refresh failed for %s: %v", path, err)
+		s.sizeCacheMu.Lock()
+		cached := s.sizeCache[path]
+		cached.refreshing = false
+		s.sizeCache[path] = cached
+		s.sizeCacheMu.Unlock()
+		return
+	}
+	s.storeSize(path, size)
+}
+
+func (s *Store) storeSize(path string, size int64) {
+	s.sizeCacheMu.Lock()
+	s.sizeCache[path] = cachedSize{size: size, updatedAt: time.Now()}
+	s.sizeCacheMu.Unlock()
+}
+
+func walkSize(path string) (int64, error) {
 	startedAt := time.Now()
 	log.Printf("scanning directory size: %s", path)
 	var size int64
-	err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -280,12 +331,7 @@ func (s *Store) sizeOf(path string, useCache bool) (int64, error) {
 		return nil
 	})
 	if err == nil {
-		if useCache {
-			s.sizeCacheMu.Lock()
-			s.sizeCache[path] = cachedSize{size: size, updatedAt: time.Now()}
-			s.sizeCacheMu.Unlock()
-			log.Printf("directory size cached: %s (%s) in %s", path, formatSize(size), time.Since(startedAt).Round(time.Millisecond))
-		}
+		log.Printf("directory size scanned: %s (%s) in %s", path, formatSize(size), time.Since(startedAt).Round(time.Millisecond))
 	}
 	return size, err
 }
